@@ -1,33 +1,35 @@
-AI Moderation: Detects toxic, offensive, NSFW, or joking/mocking messages using GPT-4.
+# Sol's RNG Security Bot
 
-Anti-Spam / Flood Protection: Automatically warns and deletes spam messages.
+A Discord moderation bot with AI-style message scanning, warning points system, automatic punishments, and slash commands. Includes keep-alive for 24/7 uptime on free hosting like Render or Replit.
 
-Warning Points System: Tracks user violations and escalates punishments.
+---
 
-Automatic Punishments:
+## Features
 
-2 WP → 1 hour mute
+- **AI Moderation:** Detects toxic, offensive, NSFW, or joking/mocking messages.
+- **Anti-Spam / Flood Protection:** Warns and deletes spam messages automatically.
+- **Warning Points System:** Tracks violations and escalates punishments.
+- **Automatic Punishments:**
+  - 2 WP → 1 hour mute
+  - 3 WP → 12 hours mute
+  - 4 WP → 1 day mute
+  - 5 WP → Ban
+- **User Alerts:** DM users on rule violation.
+- **Slash Commands:**
+  - `/warnings @user` – View user warning points
+  - `/resetwarnings @user` – Reset a user's warning points (admin only)
+  - `/announce "title" "content"` – Send announcement embed
+  - `/topviolators` – List top users with warning points
+- **Scan Links & Images:** Detect suspicious links or images.
+- **Daily Report:** Sends daily summary to mod channel.
+- **Embed Logs:** All actions logged in mod channel.
+- **Keep-Alive:** Express server for pinging to maintain 24/7 uptime.
 
-3 WP → 12 hours mute
+---
 
-4 WP → 1 day mute
+## Setup
 
-5 WP → Ban
-
-User Alerts: DM users when they violate rules before punishment.
-
-Slash Commands:
-
-/warnings @user – View user warning points
-
-/resetwarnings @user – Reset a user’s warning points (admin only)
-
-/announce "title" "content" – Send an announcement embed
-
-/topviolators – List top users with warning points
-
-Scan Links & Images: Detect suspicious Discord invites and images.
-
-Daily Report: Sends a daily summary of all violations to the mod channel.
-
-Embed Logs: All actions are logged with rich embeds in the mod channel.
+### 1. Clone the repository
+```bash
+git clone https://github.com/binh1212011-spec/Security-Bot.git
+cd Security-Bot
