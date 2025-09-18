@@ -1,8 +1,8 @@
 // ==== IMPORT MODULES ====
 const fs = require('fs');
-const { Client, GatewayIntentBits, PermissionsBitField } = require('discord.js');
+const { Client, GatewayIntentBits, PermissionsBitField, EmbedBuilder } = require('discord.js');
 const express = require('express');
-const Sentiment = require('sentiment'); // sentiment analysis miễn phí
+const Sentiment = require('sentiment');
 require('dotenv').config();
 
 // ==== KEEP-ALIVE SERVER ====
@@ -26,8 +26,8 @@ if (fs.existsSync(rulesPath)) {
 }
 
 // ==== WARNING SYSTEM ====
-let warnings = {}; // {userId: warningCount}
-let lastMessages = {}; // {userId: [timestamps]} để check flooding
+let warnings = {}; // { userId: [{ timestamp, rule }] }
+let lastMessages = {}; // Flooding check
 
 // ==== DISCORD BOT ====
 const client = new Client({
@@ -41,7 +41,19 @@ const client = new Client({
 
 // ==== UTILITY FUNCTIONS ====
 
-// Kiểm tra vi phạm rules
+// Clean old warnings (30 days)
+function cleanOldWarnings() {
+  const now = Date.now();
+  const thirtyDays = 30 * 24 * 60 * 60 * 1000;
+
+  for (const userId in warnings) {
+    warnings[userId] = warnings[userId].filter(w => now - w.timestamp <= thirtyDays);
+    if (warnings[userId].length === 0) delete warnings[userId];
+  }
+}
+setInterval(cleanOldWarnings, 60 * 60 * 1000); // mỗi 1h
+
+// Check violation
 function checkViolation(message) {
   const userId = message.author.id;
   const content = message.content.toLowerCase();
@@ -59,17 +71,14 @@ function checkViolation(message) {
   const now = Date.now();
   if (!lastMessages[userId]) lastMessages[userId] = [];
   lastMessages[userId].push(now);
-
-  // Giữ lại 10s gần nhất
   lastMessages[userId] = lastMessages[userId].filter(ts => now - ts <= 10000);
-
-  if (lastMessages[userId].length >= 5) { // 5 tin nhắn trong 10s → flooding
+  if (lastMessages[userId].length >= 5) { // 5 tin nhắn/10s
     violation = rules.find(r => r.name.toLowerCase().includes('flood'));
     return violation;
   }
 
   // ---- 3. Toxicity detection ----
-  if (sentiment.score < -2) { // negative sentiment
+  if (sentiment.score < -2) {
     violation = rules.find(r => r.name.toLowerCase().includes('toxicity') || r.name.toLowerCase().includes('discrimination'));
     return violation;
   }
@@ -87,30 +96,45 @@ function checkViolation(message) {
   return violation;
 }
 
-// Áp dụng hình phạt dựa trên warningLevel
+// Apply punishment & log
 async function applyPunishment(member, violation) {
   if (!violation) return;
   const userId = member.id;
-  warnings[userId] = warnings[userId] ? warnings[userId] + 1 : 1;
+  const now = Date.now();
 
-  console.log(`User ${member.user.tag} violated rule: ${violation.name}. Total warnings: ${warnings[userId]}`);
+  if (!warnings[userId]) warnings[userId] = [];
+  warnings[userId].push({ timestamp: now, rule: violation.name });
 
+  const userWarns = warnings[userId].length;
+
+  // Log to channel
+  const logChannelId = process.env.LOG_CHANNEL_ID;
+  const logChannel = member.guild.channels.cache.get(logChannelId);
+  if (logChannel) {
+    const embed = new EmbedBuilder()
+      .setTitle(`⚠️ Violation: ${violation.name}`)
+      .addFields(
+        { name: 'User', value: `${member.user.tag}`, inline: true },
+        { name: 'Warns', value: `${userWarns}`, inline: true },
+        { name: 'Warning Level', value: `${violation.warningLevel}` }
+      )
+      .setColor('Red')
+      .setTimestamp();
+    logChannel.send({ embeds: [embed] });
+  }
+
+  // Apply punishment
   try {
     if (violation.warningLevel === 'instant') {
       await member.ban({ reason: violation.name });
-      console.log(`${member.user.tag} was banned instantly`);
-    } else if (violation.warningLevel === 3 && warnings[userId] >= 3) {
+    } else if (violation.warningLevel === 3 && userWarns >= 3) {
       await member.kick();
-      console.log(`${member.user.tag} was kicked after 3 warnings`);
-      warnings[userId] = 0;
-    } else if (violation.warningLevel === 2 && warnings[userId] >= 2) {
-      // Mute user (cần role "Muted" trong server)
+      warnings[userId] = [];
+    } else if (violation.warningLevel === 2 && userWarns >= 2) {
       const muteRole = member.guild.roles.cache.find(r => r.name.toLowerCase() === 'muted');
       if (muteRole) await member.roles.add(muteRole);
-      console.log(`${member.user.tag} was muted for 2 warnings`);
     } else {
-      // Just warn
-      member.send(`⚠️ You violated rule: **${violation.name}**. Please follow server rules.`);
+      member.send(`⚠️ You violated rule: **${violation.name}**. Current warnings: ${userWarns}`);
     }
   } catch (err) {
     console.error('Error applying punishment:', err);
@@ -118,22 +142,22 @@ async function applyPunishment(member, violation) {
 }
 
 // ==== BOT EVENTS ====
-client.once('ready', () => {
-  console.log(`Logged in as ${client.user.tag}`);
-});
+client.once('ready', () => console.log(`Logged in as ${client.user.tag}`));
 
 client.on('messageCreate', async message => {
   if (message.author.bot) return;
 
+  // Check violation
   const violation = checkViolation(message);
   if (violation) {
     await applyPunishment(message.member, violation);
   }
 
-  // Optional: command !warnings
-  if (message.content.toLowerCase() === '!warnings') {
-    const userWarnings = warnings[message.author.id] || 0;
-    message.reply(`You have ${userWarnings} warning(s).`);
+  // Command: !warnings
+  if (message.content.toLowerCase().startsWith('!warnings')) {
+    let target = message.mentions.users.first() || message.author;
+    const userWarns = warnings[target.id] ? warnings[target.id].length : 0;
+    message.reply(`${target.tag} has ${userWarns} warning(s).`);
   }
 });
 
