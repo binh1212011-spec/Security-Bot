@@ -2,7 +2,6 @@
 const fs = require('fs');
 const { Client, GatewayIntentBits, PermissionsBitField, EmbedBuilder } = require('discord.js');
 const express = require('express');
-const Sentiment = require('sentiment');
 require('dotenv').config();
 
 // ==== KEEP-ALIVE SERVER ====
@@ -29,6 +28,17 @@ if (fs.existsSync(rulesPath)) {
 let warnings = {}; // { userId: [{ timestamp, rule }] }
 let lastMessages = {}; // Flooding check
 
+// Clean old warnings (30 days)
+function cleanOldWarnings() {
+  const now = Date.now();
+  const thirtyDays = 30 * 24 * 60 * 60 * 1000;
+  for (const userId in warnings) {
+    warnings[userId] = warnings[userId].filter(w => now - w.timestamp <= thirtyDays);
+    if (warnings[userId].length === 0) delete warnings[userId];
+  }
+}
+setInterval(cleanOldWarnings, 60 * 60 * 1000); // mỗi 1h
+
 // ==== DISCORD BOT ====
 const client = new Client({
   intents: [
@@ -41,49 +51,30 @@ const client = new Client({
 
 // ==== UTILITY FUNCTIONS ====
 
-// Clean old warnings (30 days)
-function cleanOldWarnings() {
-  const now = Date.now();
-  const thirtyDays = 30 * 24 * 60 * 60 * 1000;
-
-  for (const userId in warnings) {
-    warnings[userId] = warnings[userId].filter(w => now - w.timestamp <= thirtyDays);
-    if (warnings[userId].length === 0) delete warnings[userId];
-  }
-}
-setInterval(cleanOldWarnings, 60 * 60 * 1000); // mỗi 1h
-
 // Check violation
 function checkViolation(message) {
   const userId = message.author.id;
   const content = message.content.toLowerCase();
-  const sentiment = new Sentiment().analyze(content);
   let violation = null;
 
-  // ---- 1. Spam / link detection ----
+  // 1. Spam / advertising detection
   const spamKeywords = ['buy', 'free', 'discord.gg', 'invite', 'nitro'];
   if (spamKeywords.some(k => content.includes(k))) {
     violation = rules.find(r => r.name.toLowerCase().includes('spam') || r.name.toLowerCase().includes('advertising'));
     return violation;
   }
 
-  // ---- 2. Flooding detection ----
+  // 2. Flooding detection
   const now = Date.now();
   if (!lastMessages[userId]) lastMessages[userId] = [];
   lastMessages[userId].push(now);
-  lastMessages[userId] = lastMessages[userId].filter(ts => now - ts <= 10000);
+  lastMessages[userId] = lastMessages[userId].filter(ts => now - ts <= 10000); // 10s window
   if (lastMessages[userId].length >= 5) { // 5 tin nhắn/10s
     violation = rules.find(r => r.name.toLowerCase().includes('flood'));
     return violation;
   }
 
-  // ---- 3. Toxicity detection ----
-  if (sentiment.score < -2) {
-    violation = rules.find(r => r.name.toLowerCase().includes('toxicity') || r.name.toLowerCase().includes('discrimination'));
-    return violation;
-  }
-
-  // ---- 4. Attachment / image NSFW detection ----
+  // 3. Attachment / image NSFW detection
   if (message.attachments.size > 0) {
     message.attachments.forEach(att => {
       if (att.contentType && att.contentType.startsWith('image/')) {
