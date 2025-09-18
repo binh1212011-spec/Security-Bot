@@ -1,6 +1,6 @@
 // ==== IMPORT MODULES ====
 const fs = require('fs');
-const { Client, GatewayIntentBits, PermissionsBitField, EmbedBuilder } = require('discord.js');
+const { Client, GatewayIntentBits, EmbedBuilder } = require('discord.js');
 const express = require('express');
 require('dotenv').config();
 
@@ -26,7 +26,7 @@ if (fs.existsSync(rulesPath)) {
 
 // ==== WARNING SYSTEM ====
 let warnings = {}; // { userId: [{ timestamp, rule }] }
-let lastMessages = {}; // Flooding check
+let lastMessages = {}; // Flooding check (kiểm tra gửi tin nhắn lặp lại)
 
 // Clean old warnings (30 days)
 function cleanOldWarnings() {
@@ -51,7 +51,6 @@ const client = new Client({
 
 // ==== UTILITY FUNCTIONS ====
 
-// Check violation
 function checkViolation(message) {
   const userId = message.author.id;
   const content = message.content.toLowerCase();
@@ -138,14 +137,21 @@ client.once('ready', () => console.log(`Logged in as ${client.user.tag}`));
 client.on('messageCreate', async message => {
   if (message.author.bot) return;
 
-  // Check violation
+  // Kiểm tra vi phạm
   const violation = checkViolation(message);
   if (violation) {
     await applyPunishment(message.member, violation);
   }
 
-  // Command: !warnings
+  // Lệnh: !warnings
   if (message.content.toLowerCase().startsWith('!warnings')) {
+    // Kiểm tra xem người dùng đã gửi lệnh này chưa
+    const isCommandAlreadyProcessed = lastMessages[message.author.id] && lastMessages[message.author.id].command === '!warnings';
+    if (isCommandAlreadyProcessed) return; // Nếu đã xử lý rồi, không làm gì nữa
+
+    // Lưu lại lần gửi lệnh vào lastMessages để ngăn chặn xử lý lại
+    lastMessages[message.author.id] = { command: '!warnings', timestamp: Date.now() };
+
     let target = message.mentions.users.first() || message.author;
     const userWarns = warnings[target.id] ? warnings[target.id].length : 0;
     message.reply(`${target.tag} has ${userWarns} warning(s).`);
