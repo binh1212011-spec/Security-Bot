@@ -1,162 +1,201 @@
-// ==== IMPORT MODULES ====
-const fs = require('fs');
-const { Client, GatewayIntentBits, EmbedBuilder } = require('discord.js');
-const express = require('express');
-require('dotenv').config();
+const { Client, GatewayIntentBits, EmbedBuilder, SlashCommandBuilder, REST, Routes } = require("discord.js");
+const fs = require("fs");
+const fetch = require("node-fetch");
+const express = require("express");
+require("dotenv").config();
 
-// ==== KEEP-ALIVE SERVER ====
-const app = express();
-const PORT = process.env.PORT || 3000;
-app.get('/', (req, res) => res.send('Bot is alive!'));
-app.listen(PORT, () => console.log(`Keep-alive running on port ${PORT}`));
-
-// ==== LOAD RULES ====
-let rules = [];
-const rulesPath = './rules.json';
-if (fs.existsSync(rulesPath)) {
-  try {
-    rules = JSON.parse(fs.readFileSync(rulesPath, 'utf-8')).rules || [];
-    console.log(`Loaded ${rules.length} rules`);
-  } catch (err) {
-    console.error('Error parsing rules.json:', err);
-  }
-} else {
-  console.log('rules.json not found, starting with empty rules.');
-}
-
-// ==== WARNING SYSTEM ====
-let warnings = {}; // { userId: [{ timestamp, rule }] }
-let lastMessages = {}; // Flooding check (kiểm tra gửi tin nhắn lặp lại)
-
-// Clean old warnings (30 days)
-function cleanOldWarnings() {
-  const now = Date.now();
-  const thirtyDays = 30 * 24 * 60 * 60 * 1000;
-  for (const userId in warnings) {
-    warnings[userId] = warnings[userId].filter(w => now - w.timestamp <= thirtyDays);
-    if (warnings[userId].length === 0) delete warnings[userId];
-  }
-}
-setInterval(cleanOldWarnings, 60 * 60 * 1000); // mỗi 1h
-
-// ==== DISCORD BOT ====
+// --- Client setup ---
 const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent,
-    GatewayIntentBits.GuildMembers
-  ]
+    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent]
 });
 
-// ==== UTILITY FUNCTIONS ====
+// --- Keep-alive ---
+const app = express();
+app.get("/", (req,res)=>res.send("Bot is alive!"));
+app.listen(process.env.PORT || 3000, ()=>console.log("Keep-alive server running"));
 
-function checkViolation(message) {
-  const userId = message.author.id;
-  const content = message.content.toLowerCase();
-  let violation = null;
+// --- Load rules, warnings, whitelist ---
+const rules = JSON.parse(fs.readFileSync("rules.json"));
+const warningsFile = "warnings.json";
+let warnings = fs.existsSync(warningsFile) ? JSON.parse(fs.readFileSync(warningsFile)) : {};
+function saveWarnings(){ fs.writeFileSync(warningsFile, JSON.stringify(warnings,null,2)); }
 
-  // 1. Spam / advertising detection
-  const spamKeywords = ['buy', 'free', 'discord.gg', 'invite', 'nitro'];
-  if (spamKeywords.some(k => content.includes(k))) {
-    violation = rules.find(r => r.name.toLowerCase().includes('spam') || r.name.toLowerCase().includes('advertising'));
-    return violation;
-  }
+const whitelist = fs.existsSync("imageWhitelist.json") ? JSON.parse(fs.readFileSync("imageWhitelist.json")) : {};
+function isWhitelisted(url){
+    const domain = (new URL(url)).hostname;
+    return whitelist[url] || whitelist[domain];
+}
 
-  // 2. Flooding detection
-  const now = Date.now();
-  if (!lastMessages[userId]) lastMessages[userId] = [];
-  lastMessages[userId].push(now);
-  lastMessages[userId] = lastMessages[userId].filter(ts => now - ts <= 10000); // 10s window
-  if (lastMessages[userId].length >= 5) { // 5 tin nhắn/10s
-    violation = rules.find(r => r.name.toLowerCase().includes('flood'));
-    return violation;
-  }
+// --- Slash commands ---
+const commands = [
+  new SlashCommandBuilder().setName("warnings").setDescription("View user warning points")
+    .addUserOption(opt=>opt.setName("user").setDescription("Target user").setRequired(true)),
+  new SlashCommandBuilder().setName("resetwarnings").setDescription("Reset a user's warning points")
+    .addUserOption(opt=>opt.setName("user").setDescription("Target user").setRequired(true)),
+  new SlashCommandBuilder().setName("announce").setDescription("Send an embed announcement")
+    .addStringOption(opt=>opt.setName("title").setDescription("Title").setRequired(true))
+    .addStringOption(opt=>opt.setName("content").setDescription("Content").setRequired(true)),
+  new SlashCommandBuilder().setName("topviolators").setDescription("Show top 10 users with warning points")
+];
 
-  // 3. Attachment / image NSFW detection
-  if (message.attachments.size > 0) {
-    message.attachments.forEach(att => {
-      if (att.contentType && att.contentType.startsWith('image/')) {
-        const nsfwRule = rules.find(r => r.name.toLowerCase().includes('nsfw'));
-        if (nsfwRule) violation = nsfwRule;
-      }
+const rest = new REST({version:"10"}).setToken(process.env.DISCORD_TOKEN);
+client.once("ready", async ()=>{
+    try{
+        await rest.put(Routes.applicationGuildCommands(client.user.id, process.env.GUILD_ID), {body: commands});
+        console.log(`${client.user.tag} ready!`);
+    }catch(e){ console.log("Error registering commands:",e);}
+});
+
+// --- ModerationAPI check ---
+async function checkMessageAI(content){
+    const res = await fetch("https://moderationapi.com/api/v1/moderate",{
+        method:"POST",
+        headers:{
+            "Content-Type":"application/json",
+            "Authorization":`Bearer ${process.env.MOD_API_KEY}`
+        },
+        body: JSON.stringify({text:content})
     });
-  }
-
-  return violation;
+    return await res.json();
 }
 
-// Apply punishment & log
-async function applyPunishment(member, violation) {
-  if (!violation) return;
-  const userId = member.id;
-  const now = Date.now();
+async function checkImageAI(url){
+    const res = await fetch("https://moderationapi.com/api/v1/moderate",{
+        method:"POST",
+        headers:{
+            "Content-Type":"application/json",
+            "Authorization":`Bearer ${process.env.MOD_API_KEY}`
+        },
+        body: JSON.stringify({image_url:url})
+    });
+    return await res.json();
+}
 
-  if (!warnings[userId]) warnings[userId] = [];
-  warnings[userId].push({ timestamp: now, rule: violation.name });
+// --- Handle messages ---
+client.on("messageCreate", async message=>{
+    if(message.author.bot) return;
 
-  const userWarns = warnings[userId].length;
+    let violationDetected=false;
+    let severity=0;
+    let matchedRule="";
 
-  // Log to channel
-  const logChannelId = process.env.LOG_CHANNEL_ID;
-  const logChannel = member.guild.channels.cache.get(logChannelId);
-  if (logChannel) {
-    const embed = new EmbedBuilder()
-      .setTitle(`⚠️ Violation: ${violation.name}`)
-      .addFields(
-        { name: 'User', value: `${member.user.tag}`, inline: true },
-        { name: 'Warns', value: `${userWarns}`, inline: true },
-        { name: 'Warning Level', value: `${violation.warningLevel}` }
-      )
-      .setColor('Red')
-      .setTimestamp();
-    logChannel.send({ embeds: [embed] });
-  }
-
-  // Apply punishment
-  try {
-    if (violation.warningLevel === 'instant') {
-      await member.ban({ reason: violation.name });
-    } else if (violation.warningLevel === 3 && userWarns >= 3) {
-      await member.kick();
-      warnings[userId] = [];
-    } else if (violation.warningLevel === 2 && userWarns >= 2) {
-      const muteRole = member.guild.roles.cache.find(r => r.name.toLowerCase() === 'muted');
-      if (muteRole) await member.roles.add(muteRole);
-    } else {
-      member.send(`⚠️ You violated rule: **${violation.name}**. Current warnings: ${userWarns}`);
+    // --- Check rules.json ---
+    for(const rule of rules){
+        for(const kw of rule.keywords){
+            if(message.content.toLowerCase().includes(kw.toLowerCase())){
+                violationDetected=true;
+                severity=rule.severity;
+                matchedRule=rule.title;
+                break;
+            }
+        }
+        if(rule.regex && new RegExp(rule.regex,"i").test(message.content)){
+            violationDetected=true;
+            severity=rule.severity;
+            matchedRule=rule.title;
+        }
+        if(violationDetected) break;
     }
-  } catch (err) {
-    console.error('Error applying punishment:', err);
-  }
-}
 
-// ==== BOT EVENTS ====
-client.once('ready', () => console.log(`Logged in as ${client.user.tag}`));
+    // --- Check AI text ---
+    try{
+        const result = await checkMessageAI(message.content);
+        if(result.flagged){
+            violationDetected=true;
+            severity += 1;
+            matchedRule = (matchedRule ? matchedRule+", " : "") + result.categories.join(", ");
+        }
+    }catch(err){ console.log("AI text check error:",err); }
 
-client.on('messageCreate', async message => {
-  if (message.author.bot) return;
+    // --- Check AI images ---
+    if(message.attachments.size>0){
+        for(const att of message.attachments.values()){
+            if(isWhitelisted(att.url)) continue;
+            try{
+                const imgResult = await checkImageAI(att.url);
+                if(imgResult.flagged){
+                    violationDetected=true;
+                    severity += 1;
+                    matchedRule = (matchedRule ? matchedRule+", " : "") + "Image: "+imgResult.categories.join(", ");
+                }
+            }catch(err){ console.log("AI image check error:",err); }
+        }
+    }
 
-  // Kiểm tra vi phạm
-  const violation = checkViolation(message);
-  if (violation) {
-    await applyPunishment(message.member, violation);
-  }
+    // --- If violation detected ---
+    if(violationDetected){
+        const uid = message.author.id;
+        warnings[uid] = (warnings[uid]||0)+severity;
+        saveWarnings();
 
-  // Lệnh: !warnings
-  if (message.content.toLowerCase().startsWith('!warnings')) {
-    // Kiểm tra xem người dùng đã gửi lệnh này chưa
-    const isCommandAlreadyProcessed = lastMessages[message.author.id] && lastMessages[message.author.id].command === '!warnings';
-    if (isCommandAlreadyProcessed) return; // Nếu đã xử lý rồi, không làm gì nữa
+        // DM user
+        try{ await message.author.send(`⚠️ You received ${severity} WP for: ${matchedRule}. Total WP: ${warnings[uid]}`);}catch(e){}
 
-    // Lưu lại lần gửi lệnh vào lastMessages để ngăn chặn xử lý lại
-    lastMessages[message.author.id] = { command: '!warnings', timestamp: Date.now() };
+        message.reply(`⚠️ Violation detected: ${matchedRule}. Warning points: ${warnings[uid]}`);
 
-    let target = message.mentions.users.first() || message.author;
-    const userWarns = warnings[target.id] ? warnings[target.id].length : 0;
-    message.reply(`${target.tag} has ${userWarns} warning(s).`);
-  }
+        // Log to mod channel
+        const embed = new EmbedBuilder()
+            .setTitle("⚠️ User Violation / Action Taken")
+            .addFields(
+                {name:"User", value:`<@${uid}>`},
+                {name:"Rule / AI Categories", value: matchedRule},
+                {name:"Warning Points", value: warnings[uid].toString()}
+            )
+            .setColor("#FF0000")
+            .setTimestamp();
+
+        const logChannel = await client.channels.fetch(process.env.MOD_LOG_CHANNEL_ID);
+        logChannel.send({embeds:[embed]});
+
+        // Auto punishment
+        const member = await message.guild.members.fetch(uid);
+        let actionTaken="";
+        try{
+            if(warnings[uid] === 2){ await member.timeout(60*60*1000,"2 WP Mute"); actionTaken="Muted 1h";}
+            else if(warnings[uid] === 3){ await member.timeout(12*60*60*1000,"3 WP Mute"); actionTaken="Muted 12h";}
+            else if(warnings[uid] === 4){ await member.timeout(24*60*60*1000,"4 WP Mute"); actionTaken="Muted 1d";}
+            else if(warnings[uid] >= 5){ await member.ban({reason:"5 WP Ban"}); actionTaken="Banned";}
+        }catch(e){ console.log(e); }
+
+        // Log action
+        if(actionTaken){
+            const actionEmbed = new EmbedBuilder()
+                .setTitle("🛡️ Action Taken")
+                .addFields(
+                    {name:"User", value:`<@${uid}>`},
+                    {name:"Action", value: actionTaken},
+                    {name:"Reason", value: matchedRule},
+                    {name:"Warning Points", value: warnings[uid].toString()}
+                )
+                .setColor("#FFAA00")
+                .setTimestamp();
+            logChannel.send({embeds:[actionEmbed]});
+        }
+    }
 });
 
-// ==== LOGIN BOT ====
-client.login(process.env.TOKEN);
+// --- Slash commands ---
+client.on("interactionCreate", async interaction=>{
+    if(!interaction.isChatInputCommand()) return;
+    const uid = interaction.options.getUser("user")?.id;
+    if(interaction.commandName==="warnings"){
+        await interaction.reply(`User has ${warnings[uid]||0} warning points.`);
+    }else if(interaction.commandName==="resetwarnings"){
+        warnings[uid]=0;
+        saveWarnings();
+        await interaction.reply(`Reset warning points for <@${uid}>.`);
+    }else if(interaction.commandName==="announce"){
+        const title = interaction.options.getString("title");
+        const content = interaction.options.getString("content");
+        const embed = new EmbedBuilder().setTitle(title).setDescription(content).setColor("#303030").setTimestamp();
+        await interaction.channel.send({embeds:[embed]});
+        await interaction.reply({content:"Announcement sent!",ephemeral:true});
+    }else if(interaction.commandName==="topviolators"){
+        const sorted = Object.entries(warnings).sort((a,b)=>b[1]-a[1]).slice(0,10);
+        let desc = sorted.map(([id,pts])=>`<@${id}>: ${pts}`).join("\n") || "No violators yet.";
+        const embed = new EmbedBuilder().setTitle("Top Violators").setDescription(desc).setColor("#FFAA00").setTimestamp();
+        await interaction.reply({embeds:[embed]});
+    }
+});
+
+client.login(process.env.DISCORD_TOKEN);
