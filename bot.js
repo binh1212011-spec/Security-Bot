@@ -4,7 +4,6 @@ const {
   GatewayIntentBits,
   Partials,
   EmbedBuilder,
-  PermissionsBitField,
   REST,
   Routes,
   SlashCommandBuilder,
@@ -15,9 +14,10 @@ require("dotenv").config();
 
 // ==== LOAD CONFIG ====
 const TOKEN = process.env.TOKEN;
-const API_KEY = process.env.API_KEY;
+const BOT_ID = process.env.BOT_ID;
 const GUILD_ID = process.env.GUILD_ID;
 const LOG_CHANNEL_ID = process.env.LOG_CHANNEL_ID;
+const API_KEY = process.env.API_KEY;
 
 // ==== INIT BOT ====
 const client = new Client({
@@ -48,17 +48,27 @@ async function addWarning(userId, guild, reason) {
   saveWarnings();
 
   const points = warnings[userId].points;
-  const member = await guild.members.fetch(userId);
+  let member;
+  try {
+    member = await guild.members.fetch(userId);
+  } catch (err) {
+    console.error("Failed to fetch member:", err);
+    return;
+  }
 
   // Punishments
-  if (points === 2) {
-    await member.timeout(60 * 60 * 1000, "Mute 1h (2 warns)");
-  } else if (points === 3) {
-    await member.timeout(12 * 60 * 60 * 1000, "Mute 12h (3 warns)");
-  } else if (points === 4) {
-    await member.timeout(24 * 60 * 60 * 1000, "Mute 1d (4 warns)");
-  } else if (points >= 5) {
-    await member.ban({ reason: "5 warns = ban" });
+  try {
+    if (points === 2) {
+      await member.timeout(60 * 60 * 1000, "Mute 1h (2 warns)");
+    } else if (points === 3) {
+      await member.timeout(12 * 60 * 60 * 1000, "Mute 12h (3 warns)");
+    } else if (points === 4) {
+      await member.timeout(24 * 60 * 60 * 1000, "Mute 1d (4 warns)");
+    } else if (points >= 5) {
+      await member.ban({ reason: "5 warns = ban" });
+    }
+  } catch (err) {
+    console.error("Failed to punish member:", err);
   }
 
   // Log
@@ -70,12 +80,13 @@ async function addWarning(userId, guild, reason) {
         `<@${userId}> bị cảnh cáo. Lý do: **${reason}**\nTổng điểm: **${points}**`
       )
       .setColor("Yellow");
-    logChannel.send({ embeds: [embed] });
+    logChannel.send({ embeds: [embed] }).catch(() => {});
   }
 }
 
 // ==== MODERATION API CHECK ====
 async function checkMessage(content) {
+  if (!API_KEY) return null;
   try {
     const res = await fetch(
       "https://api.moderationapi.com/v1/models/68ccdda94f14cc53a429a009/68cd094c4f14cc53a429a00b/predict",
@@ -100,8 +111,6 @@ async function checkMessage(content) {
 // ==== ON MESSAGE ====
 client.on("messageCreate", async (msg) => {
   if (!msg.guild || msg.author.bot) return;
-
-  // Bỏ qua kênh NSFW
   if (msg.channel.nsfw) return;
 
   const result = await checkMessage(msg.content);
@@ -154,53 +163,47 @@ const commands = [
     ),
 ].map((cmd) => cmd.toJSON());
 
-// Deploy commands
+// ==== DEPLOY SLASH COMMANDS ====
 const rest = new REST({ version: "10" }).setToken(TOKEN);
 (async () => {
   try {
-    await rest.put(Routes.applicationGuildCommands("YOUR_BOT_ID", GUILD_ID), {
+    await rest.put(Routes.applicationGuildCommands(BOT_ID, GUILD_ID), {
       body: commands,
     });
     console.log("✅ Slash commands loaded!");
   } catch (err) {
-    console.error(err);
+    console.error("Slash command error:", err);
   }
 })();
 
-// ==== ON SLASH ====
+// ==== ON SLASH COMMAND ====
 client.on("interactionCreate", async (i) => {
   if (!i.isChatInputCommand()) return;
 
-  if (i.commandName === "report") {
-    const user = i.options.getUser("user");
-    const reason = i.options.getString("reason");
-    await addWarning(user.id, i.guild, `Report: ${reason}`);
-    i.reply({ content: `✅ Đã report ${user.tag}`, ephemeral: true });
-  }
+  const user = i.options.getUser("user");
+  const reason = i.options.getString("reason");
 
-  if (i.commandName === "mute") {
-    const user = i.options.getUser("user");
-    const reason = i.options.getString("reason");
-    const minutes = i.options.getInteger("minutes");
-    const member = await i.guild.members.fetch(user.id);
-    await member.timeout(minutes * 60 * 1000, reason);
-    i.reply({ content: `🔇 ${user.tag} đã bị mute ${minutes} phút.`, ephemeral: true });
-  }
-
-  if (i.commandName === "ban") {
-    const user = i.options.getUser("user");
-    const reason = i.options.getString("reason");
-    await i.guild.members.ban(user.id, { reason });
-    i.reply({ content: `⛔ ${user.tag} đã bị ban.`, ephemeral: true });
-  }
-
-  if (i.commandName === "blacklist") {
-    const user = i.options.getUser("user");
-    const reason = i.options.getString("reason");
-    if (!warnings[user.id]) warnings[user.id] = { points: 0, history: [] };
-    warnings[user.id].blacklisted = true;
-    saveWarnings();
-    i.reply({ content: `🚫 ${user.tag} đã bị blacklist.`, ephemeral: true });
+  try {
+    if (i.commandName === "report") {
+      await addWarning(user.id, i.guild, `Report: ${reason}`);
+      i.reply({ content: `✅ Đã report ${user.tag}`, ephemeral: true });
+    } else if (i.commandName === "mute") {
+      const minutes = i.options.getInteger("minutes");
+      const member = await i.guild.members.fetch(user.id);
+      await member.timeout(minutes * 60 * 1000, reason);
+      i.reply({ content: `🔇 ${user.tag} đã bị mute ${minutes} phút.`, ephemeral: true });
+    } else if (i.commandName === "ban") {
+      await i.guild.members.ban(user.id, { reason });
+      i.reply({ content: `⛔ ${user.tag} đã bị ban.`, ephemeral: true });
+    } else if (i.commandName === "blacklist") {
+      if (!warnings[user.id]) warnings[user.id] = { points: 0, history: [] };
+      warnings[user.id].blacklisted = true;
+      saveWarnings();
+      i.reply({ content: `🚫 ${user.tag} đã bị blacklist.`, ephemeral: true });
+    }
+  } catch (err) {
+    console.error("Slash command action failed:", err);
+    i.reply({ content: `❌ Không thể thực hiện lệnh: ${err.message}`, ephemeral: true });
   }
 });
 
@@ -209,4 +212,13 @@ client.once("ready", () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
 });
 
+// ==== OPTIONAL: EXPRESS KEEP-ALIVE (Render) ====
+const express = require("express");
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+app.get("/", (req, res) => res.send("Bot is alive!"));
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+
+// ==== LOGIN BOT ====
 client.login(TOKEN);
