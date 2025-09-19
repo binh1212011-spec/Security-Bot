@@ -1,153 +1,79 @@
 {
-  "rules": [
+  "1_warning": [
     {
-      "id": 1,
       "name": "Flooding/Spamming",
       "description": "Messages that occupy a large portion of the screen or involve the excessive posting of irrelevant content.",
-      "warningLevel": 1,
-      "exceptions": "Informative messages",
-      "additionalPunishment": "1 Hour mute"
+      "extra": "1h mute"
     },
     {
-      "id": 2,
       "name": "Excessive Begging",
-      "description": "Repeatedly asking for favors, items, roles, privileges, or other benefits in an annoying or disruptive manner.",
-      "warningLevel": 1,
-      "exceptions": "Jokingly begging"
+      "description": "Repeatedly asking for favors, items, roles, privileges, or other benefits in an annoying or disruptive manner."
     },
     {
-      "id": 3,
       "name": "XP Farming",
-      "description": "Sending messages solely to gain XP in the Arcane bot and disrupting the chat, while also being unfair to the legitimate users.",
-      "warningLevel": 1,
-      "additionalPunishment": "1 Hour mute",
-      "consequences": [
-        "1st Offense = reminder",
-        "2nd Offense = Reduce XP",
-        "3rd Offense = Level Reset"
-      ]
+      "description": "Sending messages solely to gain XP in the Arcane bot and disrupting the chat."
     },
     {
-      "id": 4,
-      "name": "Channel Misuses",
-      "description": "Any kind of misuse in channels under 1 Warning Rules category.",
-      "warningLevel": 1
-    },
+      "name": "Channel Misuse",
+      "description": "Using chatting, macro, or community channels incorrectly."
+    }
+  ],
+  "2_warning": [
     {
-      "id": 5,
-      "name": "Chatting Channel Misuse",
-      "description": "Using the chatting channels for purposes other than chatting. Includes: Bot commands outside of the Bots channel.",
-      "warningLevel": 1
-    },
-    {
-      "id": 6,
-      "name": "Macro Channels Misuse",
-      "description": "Using channels in the macro category incorrectly.",
-      "warningLevel": 1,
-      "consequences": [
-        "1x Warn: Reminder",
-        "2x Warn: 1 Day Macro Channels Blacklist",
-        "3x Warn: 1 Week Macro Channels Blacklist"
-      ]
-    },
-    {
-      "id": 7,
-      "name": "Community Channels Misuse",
-      "description": "Using the channels in the Community section for inappropriate purposes.",
-      "warningLevel": 1,
-      "consequences": [
-        "1x Warn: Reminder",
-        "2x Warn: 1 Day Misuse Channel Blacklist",
-        "3x Warn: 1 Week Misuse Channel Blacklist"
-      ]
-    },
-    {
-      "id": 8,
-      "name": "Voice Channel Misuse",
-      "description": "Misusing / improperly utilizing the voice channels.",
-      "warningLevel": 1,
-      "additionalPunishment": "1 Hour mute"
-    },
-    {
-      "id": 9,
       "name": "Inappropriate/Suggestive Language",
-      "description": "Implying/Referencing something inappropriate, offensive, or sexual.",
-      "warningLevel": 2
+      "description": "Implication or reference to something offensive or sexual."
     },
     {
-      "id": 10,
       "name": "Toxicity",
-      "description": "Engaging in disruptive behavior that can be seen as disrespectful or toxic in any way.",
-      "warningLevel": 2,
-      "exceptions": "Harmless arguments, disagreement about Sol’s RNG related topic, discussions, constructive criticism, debates, joking with consent"
+      "description": "Disruptive, disrespectful or toxic behavior."
     },
     {
-      "id": 11,
       "name": "Advertising/Self Promotion",
-      "description": "Promoting/Spreading one's media for self gain.",
-      "warningLevel": 2,
-      "exceptions": "With permission"
-    },
+      "description": "Promoting one's media for self gain without permission."
+    }
+  ],
+  "3_warning": [
     {
-      "id": 12,
       "name": "Mod Bait",
-      "description": "Sending messages that appear punishable to provoke a reaction, even though they do not violate rules.",
-      "warningLevel": 3
+      "description": "Sending messages to provoke mods, even if not rule-breaking."
     },
     {
-      "id": 13,
-      "name": "Accusation w/o Evidence",
-      "description": "Making statements or claims about an individual wrongfully and without evidence.",
-      "warningLevel": 3
+      "name": "Accusation without Evidence",
+      "description": "Accusing others without proof to damage their reputation."
     },
     {
-      "id": 14,
       "name": "DM Harassment",
-      "description": "Harassing members via DM's due to having mutual access to the Sol's RNG Communication server.",
-      "warningLevel": 3
+      "description": "Harassing members via DMs."
     },
     {
-      "id": 15,
       "name": "Discrimination",
-      "description": "Harmful stereotyping based on someone’s race, gender, sexuality, religion, or any other personal characteristics.",
-      "warningLevel": 3
-    },
+      "description": "Stereotyping or insulting based on race, gender, religion, etc."
+    }
+  ],
+  "instant_ban": [
     {
-      "id": 16,
       "name": "Punishment Evading",
-      "description": "Leaving to avoid any punishment of any kind.",
-      "warningLevel": "instant"
+      "description": "Leaving to avoid punishment."
     },
     {
-      "id": 17,
       "name": "NSFW",
-      "description": "Content that is inappropriate for any professional or public place, usually including nudity or suggestiveness of any kind.",
-      "warningLevel": "instant"
+      "description": "Sexual, explicit or adult content."
     },
     {
-      "id": 18,
       "name": "Hate Speech/Racism",
-      "description": "Any form of imagery or discussions that promotes extreme discrimination and hatred.",
-      "warningLevel": "instant"
+      "description": "Promoting hate or racism."
     },
     {
-      "id": 19,
       "name": "Child Endangerment",
-      "description": "Any act that puts minors at harm or inappropriate exposure.",
-      "warningLevel": "instant"
+      "description": "Exposing or harming minors."
     },
     {
-      "id": 20,
       "name": "Cybercrimes",
-      "description": "Any form of illegal activity online.",
-      "warningLevel": "instant"
+      "description": "Illegal online activity."
     },
     {
-      "id": 21,
       "name": "Inappropriate Profile",
-      "description": "Using an inappropriate Discord profile picture, display name, or Roblox username with offensive, suggestive, or explicit content.",
-      "warningLevel": "instant",
-      "consequences": "Kick. If rejoined and unchanged, Ban"
+      "description": "Offensive/explicit Discord profile picture, name, or Roblox username."
     }
   ]
 }
