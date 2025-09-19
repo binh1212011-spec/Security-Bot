@@ -7,7 +7,12 @@ require("dotenv").config();
 
 // ==== CLIENT SETUP ====
 const client = new Client({
-    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent]
+    intents: [
+        GatewayIntentBits.Guilds,
+        GatewayIntentBits.GuildMessages,
+        GatewayIntentBits.MessageContent,
+        GatewayIntentBits.GuildMembers
+    ]
 });
 
 // ==== KEEP-ALIVE ====
@@ -31,7 +36,7 @@ function isWhitelisted(url){
 
 // ==== HUGGING FACE MODERATION ====
 async function checkMessageAI(content){
-    const API_URL = "https://api-inference.huggingface.co/models/your-username/text-moderation-latest"; 
+    const API_URL = "https://api-inference.huggingface.co/models/KoalaAI/Text-Moderation";
     const res = await fetch(API_URL, {
         method:"POST",
         headers:{
@@ -107,7 +112,7 @@ client.on("messageCreate", async message=>{
     if(message.attachments.size>0){
         for(const att of message.attachments.values()){
             if(isWhitelisted(att.url)) continue;
-            // Currently skip image moderation
+            // Hiện tại skip image moderation
         }
     }
 
