@@ -1,7 +1,7 @@
 {
-{
-  "name": "solrng-bot-upgraded",
+  "name": "security-bot",
   "version": "1.0.0",
+  "description": "AI Security Discord Bot",
   "main": "bot.js",
   "scripts": {
     "start": "node bot.js"
