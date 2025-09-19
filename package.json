@@ -10,6 +10,7 @@
     "discord.js": "^14.16.3",
     "express": "^4.21.1",
     "sentiment": "^5.0.2",
-    "sqlite3": "^5.1.6"
+    "sqlite3": "^5.1.6",
+    "node-fetch": "^2.7.0"
   }
 }
