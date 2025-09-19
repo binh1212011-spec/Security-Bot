@@ -22,8 +22,10 @@ function saveWarnings(){ fs.writeFileSync(warningsFile, JSON.stringify(warnings,
 
 const whitelist = fs.existsSync("imageWhitelist.json") ? JSON.parse(fs.readFileSync("imageWhitelist.json")) : {};
 function isWhitelisted(url){
-    const domain = (new URL(url)).hostname;
-    return whitelist[url] || whitelist[domain];
+    try{
+        const domain = (new URL(url)).hostname;
+        return whitelist[url] || whitelist[domain];
+    }catch(e){ return false; }
 }
 
 // --- Slash commands ---
