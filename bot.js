@@ -1,21 +1,22 @@
+// ==== IMPORT MODULES ====
 const { Client, GatewayIntentBits, EmbedBuilder, SlashCommandBuilder, REST, Routes } = require("discord.js");
 const fs = require("fs");
 const fetch = require("node-fetch");
 const express = require("express");
 require("dotenv").config();
 
-// --- Client setup ---
+// ==== CLIENT SETUP ====
 const client = new Client({
     intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent]
 });
 
-// --- Keep-alive ---
+// ==== KEEP-ALIVE ====
 const app = express();
 app.get("/", (req,res)=>res.send("Bot is alive!"));
 app.listen(process.env.PORT || 3000, ()=>console.log("Keep-alive server running"));
 
-// --- Load rules, warnings, whitelist ---
-const rules = JSON.parse(fs.readFileSync("rules.json"));
+// ==== LOAD RULES, WARNINGS, WHITELIST ====
+const rules = fs.existsSync("rules.json") ? JSON.parse(fs.readFileSync("rules.json")) : [];
 const warningsFile = "warnings.json";
 let warnings = fs.existsSync(warningsFile) ? JSON.parse(fs.readFileSync(warningsFile)) : {};
 function saveWarnings(){ fs.writeFileSync(warningsFile, JSON.stringify(warnings,null,2)); }
@@ -28,7 +29,25 @@ function isWhitelisted(url){
     }catch(e){ return false; }
 }
 
-// --- Slash commands ---
+// ==== HUGGING FACE MODERATION ====
+async function checkMessageAI(content){
+    const API_URL = "https://api-inference.huggingface.co/models/your-username/text-moderation-latest"; 
+    const res = await fetch(API_URL, {
+        method:"POST",
+        headers:{
+            "Authorization": `Bearer ${process.env.HF_API_KEY}`,
+            "Content-Type":"application/json"
+        },
+        body: JSON.stringify({ inputs: content })
+    });
+    const data = await res.json();
+    return {
+        flagged: data.flagged || false,
+        categories: data.categories ? Object.keys(data.categories).filter(cat=>data.categories[cat]) : []
+    };
+}
+
+// ==== SLASH COMMANDS ====
 const commands = [
   new SlashCommandBuilder().setName("warnings").setDescription("View user warning points")
     .addUserOption(opt=>opt.setName("user").setDescription("Target user").setRequired(true)),
@@ -48,32 +67,7 @@ client.once("ready", async ()=>{
     }catch(e){ console.log("Error registering commands:",e);}
 });
 
-// --- ModerationAPI check ---
-async function checkMessageAI(content){
-    const res = await fetch("https://moderationapi.com/api/v1/moderate",{
-        method:"POST",
-        headers:{
-            "Content-Type":"application/json",
-            "Authorization":`Bearer ${process.env.MOD_API_KEY}`
-        },
-        body: JSON.stringify({text:content})
-    });
-    return await res.json();
-}
-
-async function checkImageAI(url){
-    const res = await fetch("https://moderationapi.com/api/v1/moderate",{
-        method:"POST",
-        headers:{
-            "Content-Type":"application/json",
-            "Authorization":`Bearer ${process.env.MOD_API_KEY}`
-        },
-        body: JSON.stringify({image_url:url})
-    });
-    return await res.json();
-}
-
-// --- Handle messages ---
+// ==== MESSAGE MODERATION ====
 client.on("messageCreate", async message=>{
     if(message.author.bot) return;
 
@@ -99,7 +93,7 @@ client.on("messageCreate", async message=>{
         if(violationDetected) break;
     }
 
-    // --- Check AI text ---
+    // --- Check Hugging Face AI ---
     try{
         const result = await checkMessageAI(message.content);
         if(result.flagged){
@@ -109,33 +103,24 @@ client.on("messageCreate", async message=>{
         }
     }catch(err){ console.log("AI text check error:",err); }
 
-    // --- Check AI images ---
+    // --- Check images ---
     if(message.attachments.size>0){
         for(const att of message.attachments.values()){
             if(isWhitelisted(att.url)) continue;
-            try{
-                const imgResult = await checkImageAI(att.url);
-                if(imgResult.flagged){
-                    violationDetected=true;
-                    severity += 1;
-                    matchedRule = (matchedRule ? matchedRule+", " : "") + "Image: "+imgResult.categories.join(", ");
-                }
-            }catch(err){ console.log("AI image check error:",err); }
+            // Currently skip image moderation
         }
     }
 
-    // --- If violation detected ---
+    // --- Handle violation ---
     if(violationDetected){
         const uid = message.author.id;
         warnings[uid] = (warnings[uid]||0)+severity;
         saveWarnings();
 
-        // DM user
         try{ await message.author.send(`⚠️ You received ${severity} WP for: ${matchedRule}. Total WP: ${warnings[uid]}`);}catch(e){}
 
         message.reply(`⚠️ Violation detected: ${matchedRule}. Warning points: ${warnings[uid]}`);
 
-        // Log to mod channel
         const embed = new EmbedBuilder()
             .setTitle("⚠️ User Violation / Action Taken")
             .addFields(
@@ -159,7 +144,6 @@ client.on("messageCreate", async message=>{
             else if(warnings[uid] >= 5){ await member.ban({reason:"5 WP Ban"}); actionTaken="Banned";}
         }catch(e){ console.log(e); }
 
-        // Log action
         if(actionTaken){
             const actionEmbed = new EmbedBuilder()
                 .setTitle("🛡️ Action Taken")
@@ -176,7 +160,7 @@ client.on("messageCreate", async message=>{
     }
 });
 
-// --- Slash commands ---
+// ==== SLASH COMMAND HANDLER ====
 client.on("interactionCreate", async interaction=>{
     if(!interaction.isChatInputCommand()) return;
     const uid = interaction.options.getUser("user")?.id;
