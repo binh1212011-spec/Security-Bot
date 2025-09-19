@@ -1,186 +1,113 @@
-const { Client, GatewayIntentBits, EmbedBuilder, SlashCommandBuilder, REST, Routes } = require("discord.js");
-const fs = require("fs");
+const { Client, GatewayIntentBits, EmbedBuilder, PermissionsBitField } = require("discord.js");
 const fetch = require("node-fetch");
-const express = require("express");
+const Database = require("better-sqlite3");
+const fs = require("fs");
 require("dotenv").config();
 
-// --- Client setup ---
+// ==== INIT BOT ====
 const client = new Client({
-    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent]
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
 });
 
-// --- Keep-alive ---
-const app = express();
-app.get("/", (req,res)=>res.send("Bot is alive!"));
-app.listen(process.env.PORT || 3000, ()=>console.log("Keep-alive server running"));
+// ==== DATABASE ====
+const db = new Database("warnings.db");
+db.prepare(
+  "CREATE TABLE IF NOT EXISTS warnings (userId TEXT, guildId TEXT, points INTEGER, PRIMARY KEY (userId, guildId))"
+).run();
 
-// --- Load rules, warnings, whitelist ---
-const rulesJSON = JSON.parse(fs.readFileSync("rules.json"));
-const rules = rulesJSON.rules; // <--- quan trọng: lấy mảng rules
-const warningsFile = "warnings.json";
-let warnings = fs.existsSync(warningsFile) ? JSON.parse(fs.readFileSync(warningsFile)) : {};
-function saveWarnings(){ fs.writeFileSync(warningsFile, JSON.stringify(warnings,null,2)); }
+// ==== LOAD RULES ====
+const rules = JSON.parse(fs.readFileSync("rules.json", "utf8"));
 
-const whitelist = fs.existsSync("imageWhitelist.json") ? JSON.parse(fs.readFileSync("imageWhitelist.json")) : {};
-function isWhitelisted(url){
-    try{
-        const domain = (new URL(url)).hostname;
-        return whitelist[url] || whitelist[domain];
-    }catch(e){ return false; }
+// ==== HELPER FUNCTIONS ====
+async function checkModeration(text) {
+  const response = await fetch("https://api-inference.huggingface.co/models/KoalaAI/Text-Moderation", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${process.env.HUGGINGFACE_TOKEN}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ inputs: text }),
+  });
+
+  if (!response.ok) return null;
+  return await response.json();
 }
 
-// --- Slash commands ---
-const commands = [
-  new SlashCommandBuilder().setName("warnings").setDescription("View user warning points")
-    .addUserOption(opt=>opt.setName("user").setDescription("Target user").setRequired(true)),
-  new SlashCommandBuilder().setName("resetwarnings").setDescription("Reset a user's warning points")
-    .addUserOption(opt=>opt.setName("user").setDescription("Target user").setRequired(true)),
-  new SlashCommandBuilder().setName("announce").setDescription("Send an embed announcement")
-    .addStringOption(opt=>opt.setName("title").setDescription("Title").setRequired(true))
-    .addStringOption(opt=>opt.setName("content").setDescription("Content").setRequired(true)),
-  new SlashCommandBuilder().setName("topviolators").setDescription("Show top 10 users with warning points")
-];
-
-const rest = new REST({version:"10"}).setToken(process.env.DISCORD_TOKEN);
-client.once("ready", async ()=>{
-    try{
-        await rest.put(Routes.applicationGuildCommands(client.user.id, process.env.GUILD_ID), {body: commands});
-        console.log(`${client.user.tag} ready!`);
-    }catch(e){ console.log("Error registering commands:",e);}
-});
-
-// --- Hugging Face Text Moderation ---
-async function checkMessageAI(content){
-    try{
-        const res = await fetch("https://api-inference.huggingface.co/models/KoalaAI/Text-Moderation", {
-            method: "POST",
-            headers: {
-                "Authorization": `Bearer ${process.env.HF_API_TOKEN}`,
-                "Content-Type": "application/json"
-            },
-            body: JSON.stringify({inputs: content})
-        });
-        const data = await res.json();
-        // data sẽ có flagged: true/false, categories: [...]
-        return data;
-    }catch(e){ console.log("HF moderation error:", e); return {flagged:false}; }
+function addWarning(userId, guildId, points) {
+  const existing = db.prepare("SELECT * FROM warnings WHERE userId=? AND guildId=?").get(userId, guildId);
+  if (existing) {
+    db.prepare("UPDATE warnings SET points=? WHERE userId=? AND guildId=?").run(existing.points + points, userId, guildId);
+    return existing.points + points;
+  } else {
+    db.prepare("INSERT INTO warnings (userId, guildId, points) VALUES (?, ?, ?)").run(userId, guildId, points);
+    return points;
+  }
 }
 
-// --- Handle messages ---
-client.on("messageCreate", async message=>{
-    if(message.author.bot) return;
+function getRuleByName(name) {
+  return rules.rules.find(r => r.name.toLowerCase() === name.toLowerCase());
+}
 
-    let violationDetected=false;
-    let severity=0;
-    let matchedRule="";
+async function punish(member, rule, channel) {
+  let actionText = "";
+  if (rule.warningLevel === "instant") {
+    await member.ban({ reason: rule.name }).catch(() => {});
+    actionText = "Banned instantly";
+  } else if (rule.additionalPunishment?.toLowerCase().includes("mute")) {
+    await member.timeout(60 * 60 * 1000, rule.name).catch(() => {});
+    actionText = "Muted 1h";
+  } else {
+    actionText = "Warning applied";
+  }
 
-    // --- Check rules.json ---
-    for(const rule of rules){
-        // dùng description và keywords nếu muốn
-        if(rule.keywords){
-            for(const kw of rule.keywords){
-                if(message.content.toLowerCase().includes(kw.toLowerCase())){
-                    violationDetected=true;
-                    severity += rule.warningLevel || 1;
-                    matchedRule=rule.name || rule.title || "Rule match";
-                    break;
-                }
-            }
-        }
-        if(violationDetected) break;
-    }
+  // Log
+  const embed = new EmbedBuilder()
+    .setTitle("⚠️ Rule Violation Detected")
+    .setDescription(`**User:** ${member.user.tag}\n**Rule:** ${rule.name}\n**Action:** ${actionText}`)
+    .setColor("Red")
+    .setTimestamp();
 
-    // --- Check AI text ---
-    try{
-        const result = await checkMessageAI(message.content);
-        if(result.flagged){
-            violationDetected=true;
-            severity += 1;
-            matchedRule = (matchedRule ? matchedRule+", " : "") + (result.categories?.join(", ") || "AI flagged");
-        }
-    }catch(err){ console.log("AI text check error:",err); }
+  const logChannel = channel.guild.channels.cache.get(process.env.LOG_CHANNEL_ID);
+  if (logChannel) logChannel.send({ embeds: [embed] });
 
-    // --- Check images ---
-    if(message.attachments.size>0){
-        for(const att of message.attachments.values()){
-            if(isWhitelisted(att.url)) continue;
-            // Nếu muốn check AI ảnh, thêm code API tương tự HF hoặc ModerationAPI
-        }
-    }
+  // DM
+  member.send({ embeds: [embed] }).catch(() => {});
+}
 
-    // --- If violation detected ---
-    if(violationDetected){
-        const uid = message.author.id;
-        warnings[uid] = (warnings[uid]||0)+severity;
-        saveWarnings();
+// ==== ON MESSAGE ====
+client.on("messageCreate", async (message) => {
+  if (message.author.bot) return;
+  if (message.channel.nsfw) return; // skip NSFW channels
 
-        // DM user
-        try{ await message.author.send(`⚠️ You received ${severity} WP for: ${matchedRule}. Total WP: ${warnings[uid]}`);}catch(e){}
+  const text = message.content;
+  if (!text) return;
 
-        message.reply(`⚠️ Violation detected: ${matchedRule}. Warning points: ${warnings[uid]}`);
+  // Hugging Face moderation
+  const result = await checkModeration(text);
+  if (!result || !Array.isArray(result)) return;
 
-        // Log to mod channel
-        const embed = new EmbedBuilder()
-            .setTitle("⚠️ User Violation / Action Taken")
-            .addFields(
-                {name:"User", value:`<@${uid}>`},
-                {name:"Rule / AI Categories", value: matchedRule},
-                {name:"Warning Points", value: warnings[uid].toString()}
-            )
-            .setColor("#FF0000")
-            .setTimestamp();
+  // result ví dụ: [{label: "toxic", score: 0.9}, ...]
+  const top = result[0];
+  if (!top) return;
 
-        const logChannel = await client.channels.fetch(process.env.MOD_LOG_CHANNEL_ID);
-        logChannel.send({embeds:[embed]});
+  let matchedRule = null;
 
-        // Auto punishment
-        const member = await message.guild.members.fetch(uid);
-        let actionTaken="";
-        try{
-            if(warnings[uid] === 2){ await member.timeout(60*60*1000,"2 WP Mute"); actionTaken="Muted 1h";}
-            else if(warnings[uid] === 3){ await member.timeout(12*60*60*1000,"3 WP Mute"); actionTaken="Muted 12h";}
-            else if(warnings[uid] === 4){ await member.timeout(24*60*60*1000,"4 WP Mute"); actionTaken="Muted 1d";}
-            else if(warnings[uid] >= 5){ await member.ban({reason:"5 WP Ban"}); actionTaken="Banned";}
-        }catch(e){ console.log(e); }
+  if (top.label.includes("toxic")) matchedRule = getRuleByName("Toxicity");
+  if (top.label.includes("nsfw")) matchedRule = getRuleByName("NSFW");
+  if (top.label.includes("hate")) matchedRule = getRuleByName("Hate Speech/Racism");
 
-        if(actionTaken){
-            const actionEmbed = new EmbedBuilder()
-                .setTitle("🛡️ Action Taken")
-                .addFields(
-                    {name:"User", value:`<@${uid}>`},
-                    {name:"Action", value: actionTaken},
-                    {name:"Reason", value: matchedRule},
-                    {name:"Warning Points", value: warnings[uid].toString()}
-                )
-                .setColor("#FFAA00")
-                .setTimestamp();
-            logChannel.send({embeds:[actionEmbed]});
-        }
-    }
+  if (matchedRule) {
+    const member = await message.guild.members.fetch(message.author.id);
+    const newPoints = addWarning(message.author.id, message.guild.id, matchedRule.warningLevel === "instant" ? 999 : matchedRule.warningLevel);
+    await punish(member, matchedRule, message.channel);
+
+    console.log(`User ${message.author.tag} violated ${matchedRule.name}, total warnings: ${newPoints}`);
+  }
 });
 
-// --- Slash commands ---
-client.on("interactionCreate", async interaction=>{
-    if(!interaction.isChatInputCommand()) return;
-    const uid = interaction.options.getUser("user")?.id;
-    if(interaction.commandName==="warnings"){
-        await interaction.reply(`User has ${warnings[uid]||0} warning points.`);
-    }else if(interaction.commandName==="resetwarnings"){
-        warnings[uid]=0;
-        saveWarnings();
-        await interaction.reply(`Reset warning points for <@${uid}>.`);
-    }else if(interaction.commandName==="announce"){
-        const title = interaction.options.getString("title");
-        const content = interaction.options.getString("content");
-        const embed = new EmbedBuilder().setTitle(title).setDescription(content).setColor("#303030").setTimestamp();
-        await interaction.channel.send({embeds:[embed]});
-        await interaction.reply({content:"Announcement sent!",ephemeral:true});
-    }else if(interaction.commandName==="topviolators"){
-        const sorted = Object.entries(warnings).sort((a,b)=>b[1]-a[1]).slice(0,10);
-        let desc = sorted.map(([id,pts])=>`<@${id}>: ${pts}`).join("\n") || "No violators yet.";
-        const embed = new EmbedBuilder().setTitle("Top Violators").setDescription(desc).setColor("#FFAA00").setTimestamp();
-        await interaction.reply({embeds:[embed]});
-    }
+// ==== LOGIN ====
+client.once("ready", () => {
+  console.log(`✅ Logged in as ${client.user.tag}`);
 });
 
 client.login(process.env.DISCORD_TOKEN);
